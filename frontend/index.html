@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kisan Saathi · किसान साथी</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hind:wght@400;600;700&display=swap">
+<style>
+:root{--g:#1f6b3a;--gd:#14472a;--gl:#e8f3ea;--w:#fff;--ink:#17261c;--mut:#5c6b60;--warn:#b3411f;--warnbg:#fdece6;--line:#cfe0d3}
+*{box-sizing:border-box}
+body{margin:0;font:19px/1.5 Hind,system-ui,sans-serif;color:var(--ink);background:var(--w)}
+.wrap{max-width:720px;margin:0 auto;padding:12px 14px 120px}
+header{background:var(--g);color:#fff;padding:14px}
+header .in{max-width:720px;margin:0 auto;display:flex;justify-content:space-between;align-items:center}
+h1{font-size:24px;margin:0}
+.ctl{display:grid;gap:8px;grid-template-columns:1fr 1fr;margin:12px 0}
+.ctl .full{grid-column:1/-1}
+input,select{font:inherit;padding:12px;border:2px solid var(--line);border-radius:10px;width:100%;background:#fff;color:var(--ink)}
+input:focus,select:focus,button:focus-visible{outline:3px solid var(--g);outline-offset:2px}
+button{font:inherit;font-weight:600;border:0;border-radius:10px;padding:12px 16px;cursor:pointer;background:var(--g);color:#fff}
+button.alt{background:var(--gl);color:var(--gd)}
+#lang button{background:transparent;border:2px solid #fff;padding:6px 14px}
+#lang button.on{background:#fff;color:var(--g)}
+.msg{margin:14px 0}
+.q{background:var(--gl);padding:10px 14px;border-radius:14px 14px 4px 14px;margin-left:auto;width:fit-content;max-width:90%}
+.card{border:2px solid var(--line);border-radius:14px;padding:14px;margin-top:8px}
+.warn{background:var(--warnbg);color:var(--warn);border-radius:10px;padding:10px 14px;font-weight:600;margin-bottom:10px}
+.sum{font-weight:700;font-size:21px}
+.card ul{padding-left:22px;margin:6px 0}
+.strip{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin:10px 0;text-align:center;font-size:14px}
+.strip div{background:var(--gl);border-radius:8px;padding:6px 2px}
+.strip b{display:block;font-size:22px}
+.src{font-size:14px;color:var(--mut);margin-top:10px;border-top:1px solid var(--line);padding-top:8px}
+.sell{background:var(--gl);border-radius:10px;padding:10px 14px;margin-top:10px}
+.bar{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:2px solid var(--line);padding:10px}
+.bar .in{max-width:720px;margin:0 auto;display:flex;gap:8px}
+#mic{width:64px;height:64px;border-radius:50%;font-size:28px;flex:none}
+#mic.rec{background:var(--warn)}
+.err{color:var(--warn);font-weight:600}
+</style>
+</head>
+<body>
+<header><div class="in"><h1 id="title">किसान साथी</h1>
+<div id="lang"><button data-l="hi" class="on">हिंदी</button> <button data-l="en">English</button></div></div></header>
+<div class="wrap">
+  <div class="ctl">
+    <input id="loc" class="full" autocomplete="off" aria-label="Location">
+    <select id="crop" aria-label="Crop"></select>
+    <input id="stage" aria-label="Growth stage">
+  </div>
+  <div id="chat" aria-live="polite"></div>
+  <p class="src" id="disc"></p>
+</div>
+<div class="bar"><div class="in">
+  <button id="mic" aria-label="Speak" title="Speak">🎤</button>
+  <input id="q" aria-label="Question">
+  <button id="send"></button>
+</div></div>
+<script>
+const T={hi:{title:"किसान साथी",loc:"गाँव / शहर / जिला (जैसे Kanpur)",stage:"बुवाई की तारीख / अवस्था (वैकल्पिक)",q:"अपना सवाल लिखें या बोलें",send:"पूछें",
+ listen:"🔊 सुनें",load:"जानकारी ली जा रही है… (कृपया प्रतीक्षा करें)",src:"स्रोत",sell:"बेचें या रुकें",min:"मैं ठीक से सुन नहीं पाया। कृपया दोबारा बोलें या लिखें।",
+ need:"कृपया जगह और सवाल भरें।",disc:"यह सलाह सुझाव है, गारंटी नहीं। कीटनाशक के लिए KVK या किसान कॉल सेंटर 1800-180-1551 से पूछें।",
+ miss:"ये जानकारी अभी उपलब्ध नहीं:",trend:"मंडी भाव का रुझान (₹/क्विंटल)",sp:"hi-IN",
+ crops:[["Wheat","गेहूँ"],["Rice","धान"],["Mustard","सरसों"],["Potato","आलू"],["Sugarcane","गन्ना"],["Tomato","टमाटर"],["Onion","प्याज"],["Maize","मक्का"],["_other","दूसरी फसल…"]]},
+ en:{title:"Kisan Saathi",loc:"Village / town / district (e.g. Kanpur)",stage:"Sowing date / stage (optional)",q:"Type or speak your question",send:"Ask",
+ listen:"🔊 Listen",load:"Fetching live data… please wait",src:"Sources",sell:"Sell or wait",min:"Could not hear you. Please repeat or type.",
+ need:"Please enter a location and a question.",disc:"This is a suggestion, not a guarantee. For chemicals, ask your KVK or Kisan Call Centre 1800-180-1551.",
+ miss:"Data not available right now:",trend:"Mandi price trend (Rs/quintal)",sp:"en-IN",
+ crops:[["Wheat","Wheat"],["Rice","Rice"],["Mustard","Mustard"],["Potato","Potato"],["Sugarcane","Sugarcane"],["Tomato","Tomato"],["Onion","Onion"],["Maize","Maize"],["_other","Other…"]]}};
+let L="hi",hist=[];const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function ui(){const t=T[L];$("#title").textContent=t.title;$("#loc").placeholder=t.loc;$("#stage").placeholder=t.stage;$("#q").placeholder=t.q;
+ $("#send").textContent=t.send;$("#disc").textContent=t.disc;document.documentElement.lang=L;
+ const cur=$("#crop").value;$("#crop").innerHTML=t.crops.map(c=>`<option value="${c[0]}">${c[1]}</option>`).join("");if(cur)$("#crop").value=cur;
+ document.querySelectorAll("#lang button").forEach(b=>b.classList.toggle("on",b.dataset.l===L))}
+document.querySelectorAll("#lang button").forEach(b=>b.onclick=()=>{L=b.dataset.l;ui()});ui();
+
+function fmtAnswer(a){const out=[];let ul=false;
+ for(const raw of a.split("\n")){const l=raw.trim();if(!l)continue;
+  if(l.startsWith("- ")||l.startsWith("• ")){if(!ul){out.push("<ul>");ul=true}out.push(`<li>${esc(l.slice(2))}</li>`);continue}
+  if(ul){out.push("</ul>");ul=false}
+  out.push(/^(Summary|सारांश)/i.test(l)?`<p class="sum">${esc(l.replace(/^[^:：]+[:：]\s*/,""))}</p>`:`<p><b>${esc(l)}</b></p>`)}
+ if(ul)out.push("</ul>");return out.join("")}
+const icon=d=>d.rain_mm>=1?"🌧️":d.tmax_c>=38?"☀️":"⛅";
+function strip(w){return `<div class="strip">${w.map(d=>`<div>${new Date(d.date).toLocaleDateString(T[L].sp,{weekday:"short"})}<b>${icon(d)}</b>${Math.round(d.tmax_c)}°/${Math.round(d.tmin_c)}°<br>${d.rain_mm}mm</div>`).join("")}</div>`}
+function chart(tr){if(!tr||tr.length<2)return "";const v=tr.map(t=>t.avg_modal_rs_per_quintal),mn=Math.min(...v),mx=Math.max(...v),r=(mx-mn)||1;
+ const pts=v.map((y,i)=>`${10+i*(280/(v.length-1))},${70-((y-mn)/r)*55}`).join(" ");
+ return `<p style="margin:8px 0 0"><b>${T[L].trend}</b></p><svg viewBox="0 0 300 90" width="100%" role="img"><polyline fill="none" stroke="#1f6b3a" stroke-width="3" points="${pts}"/>
+ <text x="10" y="86" font-size="11">${tr[0].date} ₹${v[0]}</text><text x="290" y="86" font-size="11" text-anchor="end">${tr.at(-1).date} ₹${v.at(-1)}</text></svg>`}
+
+function render(r,id){const t=T[L];let h="";
+ if(r.warnings?.length)h+=`<div class="warn">⚠️ ${r.warnings.map(esc).join("<br>")}</div>`;
+ h+=fmtAnswer(r.answer);
+ if(r.weather)h+=strip(r.weather);
+ if(r.best_markets?.length){const m=r.best_markets[0];h+=`<div class="sell"><b>${t.sell}:</b> ${esc(m.market)}, ${esc(m.district)} — ₹${m.modal}/q</div>`+chart(r.price_trend)}
+ if(r.missing_data?.length)h+=`<p class="err">${t.miss} ${r.missing_data.map(esc).join(", ")}</p>`;
+ if(r.sources?.length)h+=`<div class="src"><b>${t.src}:</b> ${[...new Map(r.sources.map(s=>[s.name,s])).values()].map(s=>`${esc(s.name)} (${esc(s.time)})`).join("; ")}</div>`;
+ h+=`<p><button class="alt" data-say="${id}">${t.listen}</button></p>`;return h}
+
+const answers={};
+async function ask(text){const t=T[L];const loc=$("#loc").value.trim();let crop=$("#crop").value;
+ if(crop==="_other")crop=prompt(t.crops.at(-1)[1])||"";
+ if(!loc||!text||!crop){alert(t.need);return}
+ hist.push({role:"user",content:text});
+ const chat=$("#chat");chat.insertAdjacentHTML("beforeend",`<div class="msg"><div class="q">${esc(text)}</div></div>`);
+ const id="a"+Date.now();chat.insertAdjacentHTML("beforeend",`<div class="msg"><div class="card" id="${id}">${t.load}</div></div>`);$("#q").value="";
+ try{const res=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({messages:hist.slice(-10),language:L,location:loc,crop,stage:$("#stage").value})});
+  const j=await res.json();if(!res.ok)throw new Error(j.detail||res.statusText);
+  hist.push({role:"assistant",content:j.answer});answers[id]=j.answer;$("#"+id).innerHTML=render(j,id)}
+ catch(e){hist.pop();$("#"+id).innerHTML=`<p class="err">${esc(e.message)}</p>`}
+ $("#"+id).scrollIntoView({block:"start",behavior:"smooth"})}
+$("#send").onclick=()=>ask($("#q").value.trim());
+$("#q").onkeydown=e=>{if(e.key==="Enter")$("#send").click()};
+$("#chat").onclick=e=>{const id=e.target.dataset?.say;if(!id)return;speechSynthesis.cancel();
+ const u=new SpeechSynthesisUtterance(answers[id]);u.lang=T[L].sp;speechSynthesis.speak(u)};
+
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+$("#mic").onclick=()=>{if(!SR){alert(T[L].min);return}const r=new SR();r.lang=T[L].sp;const m=$("#mic");m.classList.add("rec");
+ r.onresult=e=>{$("#q").value=e.results[0][0].transcript;ask($("#q").value)};
+ r.onerror=r.onnomatch=()=>alert(T[L].min);r.onend=()=>m.classList.remove("rec");r.start()};
+</script>
+</body>
+</html>
