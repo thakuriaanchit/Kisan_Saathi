@@ -5,7 +5,7 @@ from collections import defaultdict
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 load_dotenv()
@@ -332,4 +332,6 @@ def chat(req: ChatReq):
             "best_markets": price_data["top_markets_latest_date"] if price_data else None}
 
 
-app.mount("/", StaticFiles(directory=Path(__file__).parent.parent / "frontend", html=True), name="frontend")
+@app.get("/", include_in_schema=False)
+def index():
+    return FileResponse(Path(__file__).resolve().parent.parent / "frontend" / "index.html")
