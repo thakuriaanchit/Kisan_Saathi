@@ -68,6 +68,8 @@ def tool_weather(lat: float, lon: float, **_):
 
 
 def tool_mandi(state: str, commodity: str, district: str = "", **_):
+    state, district = state.strip().title(), (district or "").strip().title()
+    commodity = commodity.strip().title() if commodity.strip().islower() else commodity.strip()
     key = os.getenv("DATA_GOV_IN_API_KEY")
     if not key:
         return {"error": "Mandi price API key is not configured.", "missing": "prices"}
@@ -163,7 +165,7 @@ TOOL_SCHEMAS = [{"functionDeclarations": [
 SYSTEM = """You are Kisan Saathi, an assistant for Indian farmers. Reply ONLY in {lang}, in very short, simple sentences.
 Farmer context: location="{loc}", crop="{crop}", sowing/growth stage="{stage}".
 RULES:
-- Every weather, price or soil number must come from tool results in this conversation. Never invent or recall numbers. Call geocode first, then the tools needed (weather for farm actions; get_mandi_prices for selling; soil only if relevant).
+- Every weather, price or soil number must come from tool results in this conversation. Never invent or recall numbers. Call geocode first, then the tools needed (weather for farm actions; get_mandi_prices for selling; get_soil ONLY if the farmer asks about soil, fertiliser or crop suitability; never call it for irrigation, weather or selling questions).
 - If a tool returns an error, say plainly which data is missing. Do not guess.
 - Weather guidance: rain within 24h -> no spraying/fertiliser, delay irrigation; wind >30 km/h -> no spraying; >40C or <4C -> heat/frost protection tips; rain in harvest week -> harvest early or cover produce.
 - Price guidance: prefer same district/state. If latest_avg > earlier_days_avg suggest sell now; if lower, suggest waiting only if the crop stores safely. Name the best market and its modal price per quintal with the date. If suspect_entries_excluded is non-empty, mention briefly that some entries looked like data errors and were left out.
@@ -278,7 +280,7 @@ def chat(req: ChatReq):
     lang = "Hindi (Devanagari script)" if req.language == "hi" else "simple English"
     system = SYSTEM.format(lang=lang, loc=req.location, crop=req.crop, stage=req.stage or "not given")
     contents = [{"role": "user" if m.role == "user" else "model", "parts": [{"text": m.content}]} for m in req.messages]
-    sources, weather_data, price_data, errors, called, nudged, text = [], None, None, [], False, False, ""
+    sources, weather_data, price_data, errors, details, called, nudged, text = [], None, None, [], [], False, False, ""
     for _ in range(8):
         try:
             data = call_gemini(system, contents)
@@ -305,8 +307,10 @@ def chat(req: ChatReq):
                 out = fn(**(c.get("args") or {})) if fn else {"error": "unknown tool"}
             except TypeError as e:
                 out = {"error": f"bad tool arguments: {e}"}
+            print(f"[tool] {c['name']} {c.get('args')} -> {out.get('error', 'ok')}", flush=True)
             if "error" in out:
                 errors.append(out.get("missing", c["name"]))
+                details.append(f"{c['name']}: {out['error']}")
             else:
                 sources.append({"name": out["source"], "time": out["fetched_at"]})
                 if c["name"] == "get_weather":
@@ -321,7 +325,7 @@ def chat(req: ChatReq):
         text = ("मैं मौसम, फसल के काम और मंडी भाव में मदद कर सकता हूँ। कृपया खेती से जुड़ा सवाल पूछें।"
                 if req.language == "hi" else
                 "I can help with weather, crop actions and mandi prices. Please ask a farming question.")
-    return {"answer": text, "sources": sources, "missing_data": sorted(set(errors)),
+    return {"answer": text, "sources": sources, "missing_data": sorted(set(errors)), "error_details": details,
             "warnings": derive_warnings(weather_data["days"], req.language) if weather_data else [],
             "weather": weather_data["days"] if weather_data else None,
             "price_trend": price_data["trend"] if price_data else None,

@@ -93,7 +93,7 @@ function render(r,id){const t=T[L];let h="";
  h+=fmtAnswer(r.answer);
  if(r.weather)h+=strip(r.weather);
  if(r.best_markets?.length){const m=r.best_markets[0];h+=`<div class="sell"><b>${t.sell}:</b> ${esc(m.market)}, ${esc(m.district)} — ₹${m.modal}/q</div>`+chart(r.price_trend)}
- if(r.missing_data?.length)h+=`<p class="err">${t.miss} ${r.missing_data.map(esc).join(", ")}</p>`;
+ if(r.missing_data?.length)h+=`<p class="err">${t.miss} ${r.missing_data.map(esc).join(", ")}</p>`+(r.error_details?.length?`<p class="src">${r.error_details.map(esc).join("<br>")}</p>`:"");
  if(r.sources?.length)h+=`<div class="src"><b>${t.src}:</b> ${[...new Map(r.sources.map(s=>[s.name,s])).values()].map(s=>`${esc(s.name)} (${esc(s.time)})`).join("; ")}</div>`;
  h+=`<p><button class="alt" data-say="${id}">${t.listen}</button></p>`;return h}
 
