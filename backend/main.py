@@ -9,10 +9,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 load_dotenv()
-MODEL = os.getenv("LLM_MODEL", "claude-sonnet-4-6")
+MODEL = os.getenv("LLM_MODEL", "gemini-3.8-flash")
 MANDI_RESOURCE = os.getenv("MANDI_RESOURCE_ID", "9ef84268-d588-465a-a308-a864a43d0070")
 MANDI_URL = f"https://api.data.gov.in/resource/{MANDI_RESOURCE}"
-HTTP = httpx.Client(timeout=12)
+HTTP = httpx.Client(timeout=12, headers={"User-Agent": "KisanSaathi/1.0 (farmer advice app)", "Accept": "application/json"})
 app = FastAPI(title="Kisan Saathi")
 
 
@@ -20,11 +20,11 @@ def now_str():
     return dt.datetime.now().strftime("%d %b %Y, %I:%M %p")
 
 
-def get_json(url, params=None, retries=1):
+def get_json(url, params=None, retries=1, timeout=12):
     last = None
     for _ in range(retries + 1):
         try:
-            r = HTTP.get(url, params=params)
+            r = HTTP.get(url, params=params, timeout=timeout)
             r.raise_for_status()
             return r.json()
         except Exception as e:  # noqa
@@ -71,18 +71,33 @@ def tool_mandi(state: str, commodity: str, district: str = "", **_):
     key = os.getenv("DATA_GOV_IN_API_KEY")
     if not key:
         return {"error": "Mandi price API key is not configured.", "missing": "prices"}
-    base = {"api-key": key, "format": "json", "limit": 500, "filters[commodity]": commodity}
-    for scope, extra in (("district", {"filters[state]": state, "filters[district]": district}),
-                         ("state", {"filters[state]": state})):
+    base = {"api-key": key, "format": "json", "limit": int(os.getenv("MANDI_LIMIT", "100")), "filters[commodity]": commodity}
+    # The dataset exposes the state field as "state.keyword"; older examples use plain "state". Try both.
+    cands = []
+    for scope in ("district", "state"):
+        for skey in ("state", "state.keyword"):
+            e = {f"filters[{skey}]": state}
+            if scope == "district":
+                e["filters[district]"] = district
+            cands.append((scope, e))
+    answered, last_err = False, ""
+    for scope, extra in cands:
         if scope == "district" and not district:
             continue
         try:
-            recs = get_json(MANDI_URL, {**base, **extra}).get("records", [])
-        except Exception as e:
-            return {"error": f"Mandi price service unavailable: {e}", "missing": "prices"}
+            recs = get_json(MANDI_URL, {**base, **extra}, retries=1, timeout=float(os.getenv("MANDI_TIMEOUT", "45"))).get("records", [])
+            answered = True
+        except Exception as e:  # keep trying the other filter variants
+            last_err = str(e)
+            continue
+        # The API sometimes ignores the state/district filter, so enforce it here.
+        recs = [r for r in recs if str(r.get("state", "")).strip().lower() == state.strip().lower()
+                and (scope != "district" or str(r.get("district", "")).strip().lower() == district.strip().lower())]
         if recs:
             break
     else:
+        if not answered:
+            return {"error": f"Mandi price service unavailable: {last_err}", "missing": "prices"}
         return {"error": f"No mandi price found for {commodity} in {district or state}.", "missing": "prices"}
     by_date = defaultdict(list)
     for r in recs:
@@ -95,6 +110,13 @@ def tool_mandi(state: str, commodity: str, district: str = "", **_):
             continue
     if not by_date:
         return {"error": "Price records were unreadable.", "missing": "prices"}
+    suspects = []  # obvious data-entry errors (e.g. Rs 8/quintal when others are ~Rs 800): excluded, but reported
+    for d, lst in list(by_date.items()):
+        if len(lst) >= 3:
+            med = sorted(m["modal"] for m in lst)[len(lst) // 2]
+            keep = [m for m in lst if med * 0.1 <= m["modal"] <= med * 10]
+            suspects += [dict(m, date=d.isoformat()) for m in lst if m not in keep]
+            by_date[d] = keep
     dates = sorted(by_date)
     latest = dates[-1]
     best = sorted(by_date[latest], key=lambda m: -m["modal"])[:5]
@@ -105,7 +127,7 @@ def tool_mandi(state: str, commodity: str, district: str = "", **_):
             "top_markets_latest_date": best, "trend": trend,
             "latest_avg": trend[-1]["avg_modal_rs_per_quintal"],
             "earlier_days_avg": round(sum(prior) / len(prior), 1) if prior else None,
-            "note": "Prices are Rs/quintal. Trend has only the dates the API returned.",
+            "note": "Prices are Rs/quintal. Trend has only the dates the API returned.", "suspect_entries_excluded": suspects[:5],
             "source": "Data.gov.in Agmarknet", "fetched_at": now_str()}
 
 
@@ -113,7 +135,7 @@ def tool_soil(lat: float, lon: float, **_):
     try:
         d = get_json("https://rest.isric.org/soilgrids/v2.0/properties/query",
                      {"lat": lat, "lon": lon, "property": ["phh2o", "clay", "sand"],
-                      "depth": "0-5cm", "value": "mean"}, retries=0)
+                      "depth": "0-5cm", "value": "mean"}, retries=0, timeout=25)
         out = {}
         for l in d["properties"]["layers"]:
             v = l["depths"][0]["values"]["mean"]
@@ -124,16 +146,19 @@ def tool_soil(lat: float, lon: float, **_):
 
 
 TOOLS = {"geocode": tool_geocode, "get_weather": tool_weather, "get_mandi_prices": tool_mandi, "get_soil": tool_soil}
-TOOL_SCHEMAS = [
+def _obj(props, req):
+    return {"type": "OBJECT", "properties": props, "required": req}
+_S, _N = {"type": "STRING"}, {"type": "NUMBER"}
+TOOL_SCHEMAS = [{"functionDeclarations": [
     {"name": "geocode", "description": "Convert a place name to lat/lon/district/state.",
-     "input_schema": {"type": "object", "properties": {"place": {"type": "string"}}, "required": ["place"]}},
+     "parameters": _obj({"place": _S}, ["place"])},
     {"name": "get_weather", "description": "Live 7-day forecast for coordinates.",
-     "input_schema": {"type": "object", "properties": {"lat": {"type": "number"}, "lon": {"type": "number"}}, "required": ["lat", "lon"]}},
+     "parameters": _obj({"lat": _N, "lon": _N}, ["lat", "lon"])},
     {"name": "get_mandi_prices", "description": "Live mandi prices (Rs/quintal). Use English state/district/commodity names, e.g. Uttar Pradesh, Kanpur Nagar, Potato.",
-     "input_schema": {"type": "object", "properties": {"state": {"type": "string"}, "district": {"type": "string"}, "commodity": {"type": "string"}}, "required": ["state", "commodity"]}},
+     "parameters": _obj({"state": _S, "district": _S, "commodity": _S}, ["state", "commodity"])},
     {"name": "get_soil", "description": "Live soil pH/clay/sand for coordinates.",
-     "input_schema": {"type": "object", "properties": {"lat": {"type": "number"}, "lon": {"type": "number"}}, "required": ["lat", "lon"]}},
-]
+     "parameters": _obj({"lat": _N, "lon": _N}, ["lat", "lon"])},
+]}]
 
 SYSTEM = """You are Kisan Saathi, an assistant for Indian farmers. Reply ONLY in {lang}, in very short, simple sentences.
 Farmer context: location="{loc}", crop="{crop}", sowing/growth stage="{stage}".
@@ -141,7 +166,7 @@ RULES:
 - Every weather, price or soil number must come from tool results in this conversation. Never invent or recall numbers. Call geocode first, then the tools needed (weather for farm actions; get_mandi_prices for selling; soil only if relevant).
 - If a tool returns an error, say plainly which data is missing. Do not guess.
 - Weather guidance: rain within 24h -> no spraying/fertiliser, delay irrigation; wind >30 km/h -> no spraying; >40C or <4C -> heat/frost protection tips; rain in harvest week -> harvest early or cover produce.
-- Price guidance: prefer same district/state. If latest_avg > earlier_days_avg suggest sell now; if lower, suggest waiting only if the crop stores safely. Name the best market and its modal price per quintal with the date.
+- Price guidance: prefer same district/state. If latest_avg > earlier_days_avg suggest sell now; if lower, suggest waiting only if the crop stores safely. Name the best market and its modal price per quintal with the date. If suspect_entries_excluded is non-empty, mention briefly that some entries looked like data errors and were left out.
 - Never give pesticide/medicine doses; for pests/diseases suggest the local Krishi Vigyan Kendra or Kisan Call Centre 1800-180-1551.
 - If the question is unrelated to farming, politely say you help with weather, crop actions and mandi prices.
 - Format: first line "Summary: ...". Then "Do this week:" with lines "- Day: action", then "Don't:" lines. Then, only if price data was fetched, "Sell or wait:" lines. End with: "This is a suggestion, not a guarantee."
@@ -178,7 +203,7 @@ def derive_warnings(days, lang):
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "llm_key": bool(os.getenv("ANTHROPIC_API_KEY")), "mandi_key": bool(os.getenv("DATA_GOV_IN_API_KEY"))}
+    return {"ok": True, "llm_key": bool(os.getenv("GEMINI_API_KEY")), "mandi_key": bool(os.getenv("DATA_GOV_IN_API_KEY"))}
 
 
 @app.get("/api/weather")
@@ -193,6 +218,18 @@ def weather(place: str):
     return {"place": m, **w}
 
 
+@app.get("/api/soil")
+def soil(place: str):
+    g = tool_geocode(place)
+    if "error" in g:
+        raise HTTPException(404, g["error"])
+    m = g["matches"][0]
+    out = tool_soil(m["lat"], m["lon"])
+    if "error" in out:
+        raise HTTPException(503, f"{out['error']} Detail: {out.get('detail', '')}")
+    return {"place": m, **out}
+
+
 @app.get("/api/prices")
 def prices(state: str, commodity: str, district: str = ""):
     p = tool_mandi(state, commodity, district)
@@ -201,48 +238,83 @@ def prices(state: str, commodity: str, district: str = ""):
     return p
 
 
+def gen_cfg():
+    cfg = {"maxOutputTokens": 1500}
+    level = os.getenv("LLM_THINKING_LEVEL", "").strip()  # e.g. minimal / low; empty = model default
+    if level:
+        cfg["thinkingConfig"] = {"thinkingLevel": level}
+    return cfg
+
+
+def call_gemini(system, contents):
+    """Try the main model, then fallbacks. Retries on busy/overloaded errors (429/500/503/504)."""
+    models = [MODEL] + [m.strip() for m in os.getenv("LLM_FALLBACK_MODELS", "gemini-flash-lite-latest,gemini-3.1-flash-lite").split(",") if m.strip() and m.strip() != MODEL]
+    last = "unknown error"
+    for model in models:
+        for attempt in range(3):
+            r = HTTP.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                          headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"]}, timeout=float(os.getenv("LLM_TIMEOUT", "120")),
+                          json={"systemInstruction": {"parts": [{"text": system}]}, "contents": contents,
+                                "tools": TOOL_SCHEMAS, "generationConfig": gen_cfg()})
+            if r.status_code == 200:
+                return r.json()
+            try:
+                last = f"{r.status_code}: {r.json()['error']['message']}"
+            except Exception:  # noqa
+                last = f"{r.status_code}: {r.text[:200]}"
+            if r.status_code in (429, 500, 503, 504):
+                time.sleep(2 * (attempt + 1))
+                continue            # retry same model once, then fall to the next model
+            if r.status_code in (400, 404):
+                break               # this model rejected the request; try the next one
+            raise HTTPException(502, f"AI service error ({last})")
+    raise HTTPException(502, f"AI service is busy or unavailable. Last error: {last}")
+
+
 @app.post("/api/chat")
 def chat(req: ChatReq):
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        raise HTTPException(500, "ANTHROPIC_API_KEY is not set on the server.")
-    import anthropic
-    client = anthropic.Anthropic()
+    if not os.getenv("GEMINI_API_KEY"):
+        raise HTTPException(500, "GEMINI_API_KEY is not set on the server.")
     lang = "Hindi (Devanagari script)" if req.language == "hi" else "simple English"
     system = SYSTEM.format(lang=lang, loc=req.location, crop=req.crop, stage=req.stage or "not given")
-    msgs = [{"role": m.role, "content": m.content} for m in req.messages]
-    sources, weather_data, price_data, errors, called = [], None, None, [], False
-    nudged = False
+    contents = [{"role": "user" if m.role == "user" else "model", "parts": [{"text": m.content}]} for m in req.messages]
+    sources, weather_data, price_data, errors, called, nudged, text = [], None, None, [], False, False, ""
     for _ in range(8):
         try:
-            resp = client.messages.create(model=MODEL, max_tokens=1200, system=system, tools=TOOL_SCHEMAS, messages=msgs)
-        except Exception as e:
-            raise HTTPException(502, f"AI service error: {e}")
-        uses = [b for b in resp.content if b.type == "tool_use"]
-        if not uses:
-            text = "".join(b.text for b in resp.content if b.type == "text").strip()
+            data = call_gemini(system, contents)
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"AI service unreachable: {e}")
+        cands = data.get("candidates") or []
+        parts = (cands[0].get("content") or {}).get("parts", []) if cands else []
+        calls = [p["functionCall"] for p in parts if "functionCall" in p]
+        if not calls:
+            text = "".join(p.get("text", "") for p in parts if not p.get("thought")).strip()
             if not called and not nudged:  # guardrail: answer must be based on tool results
                 nudged = True
-                msgs += [{"role": "assistant", "content": resp.content},
-                         {"role": "user", "content": "Use the tools first; the answer must be based on live tool results, or politely decline if unrelated to farming."}]
+                if parts:
+                    contents.append({"role": "model", "parts": parts})
+                contents.append({"role": "user", "parts": [{"text": "Use the tools first; the answer must be based on live tool results, or politely decline if unrelated to farming."}]})
                 continue
-            if not called and nudged and not text:
-                text = ""
             break
         called = True
-        msgs.append({"role": "assistant", "content": resp.content})
+        contents.append({"role": "model", "parts": parts})
         results = []
-        for u in uses:
-            out = TOOLS[u.name](**u.input) if u.name in TOOLS else {"error": "unknown tool"}
+        for c in calls:
+            fn = TOOLS.get(c["name"])
+            try:
+                out = fn(**(c.get("args") or {})) if fn else {"error": "unknown tool"}
+            except TypeError as e:
+                out = {"error": f"bad tool arguments: {e}"}
             if "error" in out:
-                errors.append(out["missing"] if "missing" in out else u.name)
+                errors.append(out.get("missing", c["name"]))
             else:
                 sources.append({"name": out["source"], "time": out["fetched_at"]})
-                if u.name == "get_weather":
+                if c["name"] == "get_weather":
                     weather_data = out
-                if u.name == "get_mandi_prices":
+                if c["name"] == "get_mandi_prices":
                     price_data = out
-            results.append({"type": "tool_result", "tool_use_id": u.id, "content": json.dumps(out, ensure_ascii=False)})
-        msgs.append({"role": "user", "content": results})
+            results.append({"functionResponse": {"name": c["name"], "response": {"result": out}}})
+        contents.append({"role": "user", "parts": results})
     else:
         text = ""
     if not called:
