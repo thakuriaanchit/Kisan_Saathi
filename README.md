@@ -6,7 +6,7 @@ Voice/text assistant: live 7-day weather + live mandi prices + soil → plain-la
 ```mermaid
 flowchart LR
   F[Browser: HTML + Web Speech API] -->|POST /api/chat| B[FastAPI]
-  B --> A[Agent loop: Claude tool calling]
+  B --> A[Agent loop: Gemini function calling]
   A --> G[Open-Meteo Geocoding]
   A --> W[Open-Meteo Forecast]
   A --> M[Data.gov.in Agmarknet]
@@ -22,7 +22,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # fill in keys
 ```
-- `ANTHROPIC_API_KEY`: console.anthropic.com
+- `GEMINI_API_KEY`: aistudio.google.com/apikey
 - `DATA_GOV_IN_API_KEY`: free at data.gov.in (register → My Account). Confirm the resource ID for "Current daily price of various commodities from various markets (Mandi)" and set `MANDI_RESOURCE_ID` if it differs.
 
 ## Run
@@ -50,6 +50,6 @@ Manual acceptance checks: Hindi + Kanpur + Wheat + "Is this week good for irriga
 - Deployment (HF Spaces/Render) not configured; add `uvicorn` start command and env secrets there.
 
 ## Troubleshooting
-- 500 "ANTHROPIC_API_KEY is not set": check `.env`.
+- 500 "GEMINI_API_KEY is not set": check `.env`.
 - "Mandi price API key is not configured": set `DATA_GOV_IN_API_KEY`.
 - No prices: district/commodity spelling must match Agmarknet (e.g. "Kanpur Nagar"); the app falls back to state level.
